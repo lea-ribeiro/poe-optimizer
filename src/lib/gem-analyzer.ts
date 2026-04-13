@@ -1,4 +1,4 @@
-import { getPoENinjaGems, getCurrentLeague } from './poe-ninja';
+import { getPoENinjaGems, getCurrentLeague, PoEItem } from './poe-ninja';
 
 export type GemInfo = {
   name: string;
@@ -32,7 +32,7 @@ const DROP_ONLY_LIST = ['empower', 'enlighten', 'enhance', 'portal', 'added chao
 export async function analyzeBuildGems(pobData: any): Promise<GemGroup[]> {
   const gemGroups: Map<string, GemGroup> = new Map();
   const league = getCurrentLeague();
-  const marketGems = await getPoENinjaGems(league);
+  const marketGems: PoEItem[] = await getPoENinjaGems(league);
   const characterClass = pobData.PathOfBuilding?.Build?.[0]?.$.className || 'Witch';
 
   const processGem = (gemObj: any): GemInfo | null => {
@@ -112,13 +112,13 @@ export async function analyzeBuildGems(pobData: any): Promise<GemGroup[]> {
     for (const sName of searchNames) {
       // 1. Try exact variant match
       for (const v of variants) {
-        const match = marketGems.find(g => g.name.toLowerCase() === sName.toLowerCase() && g.variant === v);
+        const match = marketGems.find((g: PoEItem) => g.name.toLowerCase() === sName.toLowerCase() && g.variant === v);
         if (match) { price = match.chaosValue; break; }
       }
       if (price > 0) break;
       
       // 2. Try any match for this name (usually gives the most common variant price)
-      const anyMatch = marketGems.find(g => g.name.toLowerCase() === sName.toLowerCase());
+      const anyMatch = marketGems.find((g: PoEItem) => g.name.toLowerCase() === sName.toLowerCase());
       if (anyMatch) { price = anyMatch.chaosValue; break; }
     }
 
@@ -139,10 +139,10 @@ export async function analyzeBuildGems(pobData: any): Promise<GemGroup[]> {
       }
 
       if (d.enabled !== 'false' && obj.Gem) {
-        const rawGems = Array.isArray(obj.Gem) ? obj.Gem : [obj.Gem];
+        const rawGems: any[] = Array.isArray(obj.Gem) ? obj.Gem : [obj.Gem];
         const gemsInGroup: GemInfo[] = [];
 
-        rawGems.forEach(g => {
+        rawGems.forEach((g: any) => {
           const processed = processGem(g);
           if (processed) gemsInGroup.push(processed);
         });
@@ -169,9 +169,9 @@ export async function analyzeBuildGems(pobData: any): Promise<GemGroup[]> {
     }
 
     // Recurse
-    Object.values(obj).forEach(val => {
+    Object.values(obj).forEach((val: any) => {
       if (Array.isArray(val)) {
-        val.forEach(v => findGroups(v));
+        val.forEach((v: any) => findGroups(v));
       } else if (typeof val === 'object') {
         findGroups(val);
       }
@@ -182,3 +182,4 @@ export async function analyzeBuildGems(pobData: any): Promise<GemGroup[]> {
 
   return Array.from(gemGroups.values());
 }
+
