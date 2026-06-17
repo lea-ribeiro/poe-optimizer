@@ -5,61 +5,17 @@ import { TreeNodeInfo, TreeNodeMap, TreeNodeType } from '@/lib/tree-data';
 /**
  * Proxies + slims down GGG's official passive skill tree data.
  *
- * The official tree page (https://www.pathofexile.com/passive-skill-tree) embeds a
- * `var passiveSkillTreeData = {...}` object (~6MB) whose `nodes` dictionary is keyed by the
- * exact same numeric node IDs that Path of Building exports in <Spec nodes="...">. We fetch
- * that page, extract the embedded object, and reduce it to just what we need to label a node
- * (name + Keystone/Notable/Ascendancy/Mastery classification), cached in-memory so we don't
- * re-fetch a multi-MB page on every analysis.
+ * GGG publishes the tree data as raw JSON at github.com/grindinggear/skilltree-export.
+ * The `nodes` dictionary is keyed by the exact same numeric node IDs that Path of Building
+ * exports in <Spec nodes="...">. We fetch and slim it down to just what we need (name,
+ * type, position, connections), cached in-memory so we don't re-fetch 6MB on every analysis.
  */
 
-const TREE_URL = 'https://www.pathofexile.com/passive-skill-tree';
+const TREE_URL = 'https://raw.githubusercontent.com/grindinggear/skilltree-export/master/data.json';
 const CACHE_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
 
 let cache: { data: TreeNodeMap; fetchedAt: number } | null = null;
 
-/**
- * Extracts the JSON object assigned to `varName` in a script blob, respecting string
- * boundaries so braces inside string values (flavour text, etc.) don't break the scan.
- */
-function extractAssignedObject(source: string, varName: string): string | null {
-  const marker = `${varName} = {`;
-  const start = source.indexOf(marker);
-  if (start === -1) return null;
-
-  const objStart = start + marker.length - 1; // position of the opening '{'
-  let depth = 0;
-  let inString = false;
-  let escaped = false;
-
-  for (let i = objStart; i < source.length; i++) {
-    const ch = source[i];
-
-    if (inString) {
-      if (escaped) {
-        escaped = false;
-      } else if (ch === '\\') {
-        escaped = true;
-      } else if (ch === '"') {
-        inString = false;
-      }
-      continue;
-    }
-
-    if (ch === '"') {
-      inString = true;
-    } else if (ch === '{') {
-      depth++;
-    } else if (ch === '}') {
-      depth--;
-      if (depth === 0) {
-        return source.substring(objStart, i + 1);
-      }
-    }
-  }
-
-  return null;
-}
 
 /**
  * Computes a node's absolute canvas position from its group's origin plus its orbit
@@ -110,25 +66,22 @@ function classifyNode(raw: any, groups: any, orbitRadii: number[], skillsPerOrbi
 async function fetchAndBuildTreeData(): Promise<TreeNodeMap> {
   const response = await axios.get(TREE_URL, {
     headers: {
-      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-      'Accept-Language': 'en-US,en;q=0.9',
+      'User-Agent': 'poe-optimizer/1.0',
+      'Accept': 'application/json',
     },
-    timeout: 20000,
-    maxRedirects: 5,
+    timeout: 30000,
+    maxRedirects: 3,
   });
 
-  const html: string = response.data;
-  const jsonText = extractAssignedObject(html, 'passiveSkillTreeData');
-  if (!jsonText) {
-    throw new Error('Could not locate passiveSkillTreeData in tree page response.');
-  }
-
-  const parsed = JSON.parse(jsonText);
-  const rawNodes = parsed.nodes || {};
-  const groups = parsed.groups || {};
+  const parsed = response.data;
+  const rawNodes: Record<string, any> = parsed.nodes || {};
+  const groups: Record<string, any> = parsed.groups || {};
   const orbitRadii: number[] = parsed.constants?.orbitRadii || [];
   const skillsPerOrbit: number[] = parsed.constants?.skillsPerOrbit || [];
+
+  if (Object.keys(rawNodes).length === 0) {
+    throw new Error('Tree data response contained no nodes — data format may have changed.');
+  }
 
   const slim: TreeNodeMap = {};
   for (const [id, raw] of Object.entries(rawNodes)) {
