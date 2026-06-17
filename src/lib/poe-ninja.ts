@@ -46,13 +46,32 @@ export async function getPoENinjaGems(league: string): Promise<PoEItem[]> {
   return getPoENinjaItems(league, 'SkillGem');
 }
 
+let leagueCache: string | null = null;
+let leagueInFlight: Promise<string> | null = null;
+
 /**
- * Helper to get the current league. 
- * Defaulting to 'Standard' if 'Settlers' is gone, 
- * but in a real scenario we'd fetch this from the PoE API.
+ * Resolves the current PC softcore challenge league via our /api/league proxy (which reads
+ * GGG's official trade API), caching it for the lifetime of the page. Falls back to 'Standard'
+ * if the lookup fails.
  */
-export function getCurrentLeague(): string {
-  return 'Mirage'; // Updated for PoE 3.28 in April 2026
+export async function getCurrentLeague(): Promise<string> {
+  if (leagueCache) return leagueCache;
+  if (leagueInFlight) return leagueInFlight;
+
+  leagueInFlight = axios.get('/api/league')
+    .then(response => {
+      leagueCache = response.data?.league || 'Standard';
+      return leagueCache!;
+    })
+    .catch(error => {
+      console.error('Error fetching current league:', error);
+      return 'Standard';
+    })
+    .finally(() => {
+      leagueInFlight = null;
+    });
+
+  return leagueInFlight;
 }
 
 /**

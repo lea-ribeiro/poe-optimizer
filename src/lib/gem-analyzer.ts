@@ -31,7 +31,7 @@ const DROP_ONLY_LIST = ['empower', 'enlighten', 'enhance', 'portal', 'added chao
 
 export async function analyzeBuildGems(pobData: any): Promise<GemGroup[]> {
   const gemGroups: Map<string, GemGroup> = new Map();
-  const league = getCurrentLeague();
+  const league = await getCurrentLeague();
   const marketGems: PoEItem[] = await getPoENinjaGems(league);
   const characterClass = pobData.PathOfBuilding?.Build?.[0]?.$.className || 'Witch';
 
@@ -132,11 +132,6 @@ export async function analyzeBuildGems(pobData: any): Promise<GemGroup[]> {
     if (obj.Gem || (obj.$ && obj.$.label)) {
       const d = obj.$ || {};
       const slot = (d.slot || 'Unset').trim();
-
-      // Skip weapon swap gems only
-      if (slot.toLowerCase().includes('swap')) {
-        return;
-      }
 
       if (d.enabled !== 'false' && obj.Gem) {
         const rawGems: any[] = Array.isArray(obj.Gem) ? obj.Gem : [obj.Gem];

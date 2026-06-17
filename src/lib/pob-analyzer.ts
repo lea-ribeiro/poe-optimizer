@@ -4,6 +4,34 @@
 
 import { ArchetypeProgression, BenchmarkInfo, getProgressionForSkill } from './meta-data';
 
+/**
+ * PoB does not export a per-damage-type DPS breakdown anywhere in its saved XML (verified
+ * against the PathOfBuildingCommunity source: BuildDisplayStats.lua's curated stat list and
+ * Build.lua's XML writer only ever serialize aggregate stats like TotalDPS/CombinedDPS, never
+ * the internal FireHitAverage/ColdHitAverage/etc. PoB computes for its own UI). So instead of
+ * guessing a skill's damage type from scattered flat damage mods on gear, we trust the skill's
+ * own identity first - most skills have a fixed inherent damage type regardless of itemization.
+ * A handful of "weapon conversion" archetypes (e.g. Kinetic Blast Wander) genuinely have no
+ * fixed type - their damage type is whatever element the player crafted onto their weapon - so
+ * those are marked 'WeaponDependent' and fall back to scanning gear instead.
+ */
+type KnownSkillDamageType = 'Elemental' | 'Chaos' | 'Physical' | 'WeaponDependent';
+
+const SKILL_DAMAGE_TYPES: Record<string, KnownSkillDamageType> = {
+  'righteous fire': 'Elemental',
+  'toxic rain': 'Chaos',
+  'hexblast': 'Chaos',
+  'lightning strike': 'Elemental',
+  'kinetic blast': 'WeaponDependent',
+};
+
+function getKnownSkillDamageType(skillName: string): KnownSkillDamageType | undefined {
+  const normalized = skillName.toLowerCase();
+  // Substring match so transfigured variants (e.g. "Toxic Rain of Withering") still resolve.
+  const match = Object.keys(SKILL_DAMAGE_TYPES).find(key => normalized.includes(key));
+  return match ? SKILL_DAMAGE_TYPES[match] : undefined;
+}
+
 export type BuildArchetype = {
   isCrit: boolean;
   isMinion: boolean;
@@ -68,65 +96,75 @@ export function analyzeBuildArchetype(pobData: any): BuildArchetype {
   const items = pobData.PathOfBuilding.Items[0].Item || [];
   const itemArray = Array.isArray(items) ? items : [items];
   const itemsString = JSON.stringify(itemArray).toLowerCase();
-  
-  // Detect Unholy Might (100% Phys to Chaos Conversion)
+  const isAttackSkill = JSON.stringify(skills).toLowerCase().includes('attack');
+
+  // Detect Unholy Might (100% Phys to Chaos Conversion - verified current PoE1 behaviour,
+  // post-3.24 rework; it used to be a 30% "as extra" bonus, not a full conversion).
   const hasUnholyMight = itemsString.includes('unholy might') || JSON.stringify(allGemsInBuild).toLowerCase().includes('unholy might');
 
-  // Dynamic Item Scanning
-  const scanItemsForFlat = (type: string) => {
-    let totalFlat = 0;
-    itemArray.forEach((item: any) => {
-      const text = (item._ || item).toLowerCase();
-      if (text.includes(type.toLowerCase()) && text.includes('adds')) {
-        const matches = text.match(/adds (\d+) to (\d+)/g);
-        if (matches) {
-          matches.forEach((m: string) => {
-            const nums = m.match(/\d+/g);
-            if (nums) totalFlat += (parseInt(nums[0]) + parseInt(nums[1])) / 2;
-          });
+  const knownType = getKnownSkillDamageType(mainSkillName);
+  let breakdown: { chaos: number, ele: number, phys: number };
+
+  if (knownType && knownType !== 'WeaponDependent') {
+    // Trust the skill's own known identity rather than guessing from gear mods.
+    breakdown = { chaos: 0, ele: 0, phys: 0 };
+    if (knownType === 'Chaos') breakdown.chaos = 100;
+    else if (knownType === 'Physical') breakdown.phys = 100;
+    else breakdown.ele = 100;
+
+    if (hasUnholyMight && breakdown.phys > 0) {
+      breakdown.chaos += breakdown.phys;
+      breakdown.phys = 0;
+    }
+  } else {
+    // Unknown skill, or a weapon-conversion archetype (e.g. Kinetic Blast) whose damage type
+    // is determined by gear choice rather than the skill itself. Best-effort fallback: sum
+    // flat "Adds X to Y <type> Damage" mods across gear as a proxy for the damage split.
+    const scanItemsForFlat = (type: string) => {
+      let totalFlat = 0;
+      itemArray.forEach((item: any) => {
+        const text = (item._ || item).toLowerCase();
+        if (text.includes(type.toLowerCase()) && text.includes('adds')) {
+          const matches = text.match(/adds (\d+) to (\d+)/g);
+          if (matches) {
+            matches.forEach((m: string) => {
+              const nums = m.match(/\d+/g);
+              if (nums) totalFlat += (parseInt(nums[0]) + parseInt(nums[1])) / 2;
+            });
+          }
         }
-      }
-    });
-    return totalFlat;
-  };
+      });
+      return totalFlat;
+    };
 
-  let chaos = 0;
-  let ele = scanItemsForFlat('fire') + scanItemsForFlat('cold') + scanItemsForFlat('lightning');
-  let phys = scanItemsForFlat('physical');
+    let chaos = 0;
+    let ele = scanItemsForFlat('fire') + scanItemsForFlat('cold') + scanItemsForFlat('lightning');
+    let phys = scanItemsForFlat('physical');
 
-  // Kinetic Blast of Clustering: 17% of max mana as flat physical
-  if (mainSkillName.toLowerCase().includes('clustering')) {
-    phys += totalMana * 0.17;
+    // Kinetic Blast of Clustering: Added Physical Damage equal to 17% of Maximum Mana
+    // (verified against the gem's current 3.27+ tooltip).
+    if (mainSkillName.toLowerCase().includes('clustering')) {
+      phys += totalMana * 0.17;
+    }
+
+    // Whispers of Infinity: (5-10) to (20-25) Added ATTACK Chaos Damage per 100 Maximum Mana
+    // (verified against the item's wiki tooltip) - only applies to Attack skills.
+    if (isAttackSkill && itemsString.includes('whispers of infinity')) {
+      chaos += (totalMana / 100) * 12.5; // ~midpoint of the roll range
+    }
+
+    if (hasUnholyMight) {
+      chaos += phys;
+      phys = 0;
+    }
+
+    const totalFlat = chaos + ele + phys || 1;
+    breakdown = {
+      chaos: (chaos / totalFlat) * 100,
+      ele: (ele / totalFlat) * 100,
+      phys: (phys / totalFlat) * 100,
+    };
   }
-
-  // Whispers of Infinity: 5 to 20 Chaos per 100 mana (Average 12.5)
-  if (itemsString.includes('whispers of infinity')) {
-    chaos += (totalMana / 100) * 12.5;
-  }
-
-  // Apply Conversions
-  if (hasUnholyMight) {
-    console.log('[Analyzer] Unholy Might Detected: Converting 100% Physical to Chaos.');
-    chaos += phys;
-    phys = 0;
-  }
-
-  const totalFlat = chaos + ele + phys || 1;
-  const finalChaos = (chaos / totalFlat) * totalCombined;
-  const finalEle = (ele / totalFlat) * totalCombined;
-  const finalPhys = (phys / totalFlat) * totalCombined;
-
-  const breakdown = { 
-    chaos: (finalChaos / totalCombined) * 100, 
-    ele: (finalEle / totalCombined) * 100, 
-    phys: (finalPhys / totalCombined) * 100 
-  };
-
-  console.log('[Analyzer] Complex Breakdown:', {
-    Mana: totalMana,
-    UnholyMight: hasUnholyMight,
-    Result: breakdown
-  });
 
   let damageType: BuildArchetype['damageType'] = 'Elemental';
   if (breakdown.chaos > breakdown.ele && breakdown.chaos > breakdown.phys) damageType = 'Chaos';
@@ -136,7 +174,7 @@ export function analyzeBuildArchetype(pobData: any): BuildArchetype {
     isCrit: getStat('CritChance') > 5, 
     isMinion: JSON.stringify(skills).toLowerCase().includes('minion'), 
     isSpell: JSON.stringify(skills).toLowerCase().includes('spell'), 
-    isAttack: JSON.stringify(skills).toLowerCase().includes('attack'), 
+    isAttack: isAttackSkill,
     defenseType: getStat('EnergyShield') > getStat('Life') * 2 ? 'ES' : (getStat('EnergyShield') > 500 ? 'Hybrid' : 'Life'), 
     mainSkillName, 
     damageType, 

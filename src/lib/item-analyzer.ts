@@ -1,5 +1,6 @@
 import { PoEItem, getPoENinjaItems, getCurrentLeague } from './poe-ninja';
 import { getProgressionForSkill, ProgressionTier } from './meta-data';
+import { getWikiItemIcon } from './wiki-images';
 
 export type BuildItem = {
   name: string;
@@ -121,19 +122,77 @@ export function parseItemStats(itemRaw: string) {
   return { prefixes, suffixes, implicits, explicits };
 }
 
+// Utility flask base names, keyed by a substring that survives prefix/suffix mangling
+// (e.g. "Catalysed Quicksilver Flask of Adrenaline" still contains "quicksilver"). poe.ninja
+// doesn't track these (no meaningful trade value), so they never get an icon from market data.
+const FLASK_BASE_NAMES: Record<string, string> = {
+  'quicksilver': 'Quicksilver Flask',
+  'diamond': 'Diamond Flask',
+  'granite': 'Granite Flask',
+  'jade': 'Jade Flask',
+  'quartz': 'Quartz Flask',
+  'silver': 'Silver Flask',
+  'stibnite': 'Stibnite Flask',
+  'sulphur': 'Sulphur Flask',
+  'basalt': 'Basalt Flask',
+  'ruby': 'Ruby Flask',
+  'sapphire': 'Sapphire Flask',
+  'topaz': 'Topaz Flask',
+};
+
+/**
+ * Best-effort guess at the canonical wiki page title for an item poe.ninja has no icon for.
+ * Returns undefined when there isn't enough confidence to avoid a wasted lookup (e.g. a rare
+ * item's randomly-generated name won't match any wiki page).
+ */
+function guessWikiPageTitle(name: string, type: BuildItem['type'], itemTextLow: string): string | undefined {
+  if (type === 'Flask') {
+    const cleanName = name.toLowerCase();
+    const match = Object.keys(FLASK_BASE_NAMES).find(key => cleanName.includes(key));
+    if (match) return FLASK_BASE_NAMES[match];
+    // Life/Mana/Hybrid flask tiers (e.g. "Divine Life Flask") aren't affixed like utility
+    // flasks are - the parsed name is already the exact base name.
+    if (cleanName.includes('flask')) return name;
+    return undefined;
+  }
+
+  // Cluster jewels are always Rare with a randomly-generated name, so `name` itself is
+  // useless for a wiki lookup - detect the base size from the raw item text instead.
+  if (itemTextLow.includes('large cluster jewel')) return 'Large Cluster Jewel';
+  if (itemTextLow.includes('medium cluster jewel')) return 'Medium Cluster Jewel';
+  if (itemTextLow.includes('small cluster jewel')) return 'Small Cluster Jewel';
+
+  return undefined;
+}
+
 /**
  * Analyzes items from PoB data and cross-references with poe.ninja prices.
  */
 export async function analyzeBuildItems(pobData: any, mainSkill?: string, mode: 'Optimize' | 'Reverse' = 'Optimize'): Promise<BuildItem[]> {
   const items: BuildItem[] = [];
-  const league = getCurrentLeague();
+  const pendingWikiLookups: { item: BuildItem, queryName: string }[] = [];
+  const league = await getCurrentLeague();
   
-  // 1. Fetch Market Data (including BaseTypes for rare icons)
+  // 1. Fetch Market Data Sequentially with fallback logic
   const categories = ['UniqueArmour', 'UniqueWeapon', 'UniqueAccessory', 'UniqueFlask', 'UniqueJewel', 'BaseType', 'ClusterJewel'];
-  const marketData = await Promise.all(categories.map(cat => getPoENinjaItems(league, cat as any)));
-  const allUniques = marketData.flat(); // Flatten everything for easy search
-  const baseTypes = marketData[5];
-  const clusterJewels = marketData[6];
+  const marketData: any[] = [];
+  
+  for (const cat of categories) {
+    try {
+      console.log(`[ItemAnalyzer] Fetching category: ${cat}`);
+      const data = await getPoENinjaItems(league, cat as any);
+      marketData.push(data);
+      // Aggressive delay to prevent poe.ninja block
+      await new Promise(resolve => setTimeout(resolve, 500));
+    } catch (e) {
+      console.error(`Failed to fetch category ${cat}:`, e);
+      marketData.push([]);
+    }
+  }
+
+  const allUniques = marketData.slice(0, 5).flat(); 
+  const baseTypes = marketData[5] || [];
+  const clusterJewels = marketData[6] || [];
   const allBaseTypes = [...baseTypes, ...clusterJewels];
 
   // Map Items to Slots
@@ -148,12 +207,14 @@ export async function analyzeBuildItems(pobData: any, mainSkill?: string, mode: 
 
   const itemIdToSlot: Record<string, string> = {};
   
-  // Helper to add slots to the map
+  // Helper to add slots to the map. Weapon swap ("Weapon 1 Swap"/"Weapon 2 Swap" in PoB) is
+  // included - it's normalized to its own "Weapon Swap"/"Offhand Swap" slot names below, so it
+  // naturally flows through the same comparison UI as the main loadout without being mixed in.
   const addSlots = (slots: any[]) => {
     slots.forEach((s: any) => {
       const slotName = s.$.name;
       const itemId = s.$.itemId;
-      if (itemId && itemId !== '0' && !slotName.toLowerCase().includes('swap')) {
+      if (itemId && itemId !== '0') {
         itemIdToSlot[itemId] = slotName;
       }
     });
@@ -218,6 +279,8 @@ export async function analyzeBuildItems(pobData: any, mainSkill?: string, mode: 
 
     if (slot === 'Weapon 1') slot = 'Weapon';
     if (slot === 'Weapon 2') slot = 'Offhand';
+    if (slot === 'Weapon 1 Swap') slot = 'Weapon Swap';
+    if (slot === 'Weapon 2 Swap') slot = 'Offhand Swap';
     
     // For Gear Match-Up to work, unique jewels need a consistent slot naming if unslotted
     if (type === 'Jewel' && rarity === 'UNIQUE' && !slot.startsWith('Jewel:')) {
@@ -285,18 +348,11 @@ export async function analyzeBuildItems(pobData: any, mainSkill?: string, mode: 
         }
       }
 
-      if (!icon) {
-        const cleanName = name.toLowerCase();
-        if (cleanName.includes('quicksilver flask') || itemText.includes('quicksilver flask')) {
-          // Reliable Quicksilver Flask icon from poecdn (direct link usually used by poe.ninja)
-          icon = 'https://web.poecdn.com/gen/image/WzI1LDE0LHsiZiI6IjJESXRlbXMvRmxhc2tzL1F1aWNrc2lsdmVyIiwidyI6MSwiaCI6Miwic2NhbGUiOjF9XQ/7397e682e5/Quicksilver.png';
-          // If that still fails, use a base64 or a extremely stable alternative
-          icon = 'https://poe.ninja/images/items/quicksilver-flask.png'; 
-        } else if (itemText.includes('large cluster jewel')) {
-          icon = 'https://web.poecdn.com/gen/image/WzI1LDE0LHsiZiI6IjJESXRlbXMvSmV3ZWxzL0NsdXN0ZXJKZXdlbExhcmdlIiwidyI6MSwiaCI6MSwic2NhbGUiOjF9XQ/776097d622/ClusterJewelLarge.png';
-        }
-      }
     }
+
+    // Items poe.ninja has no pricing/icon data for (utility flasks and cluster jewel bases
+    // aren't traded/tracked there) get resolved against the wiki below, after this loop.
+    const wikiQueryName = icon ? undefined : guessWikiPageTitle(name, type, itemText.toLowerCase());
 
     let metaMandatory = false;
     if (metaProgression) {
@@ -310,7 +366,7 @@ export async function analyzeBuildItems(pobData: any, mainSkill?: string, mode: 
     if (price > 1000) tier = 'Luxury';
     else if (price > 100 || rarity === 'UNIQUE') tier = 'Core';
 
-    items.push({
+    const newItem: BuildItem = {
       name,
       slot,
       rarity,
@@ -325,8 +381,15 @@ export async function analyzeBuildItems(pobData: any, mainSkill?: string, mode: 
       suffixes,
       implicits,
       explicits
-    });
+    };
+    items.push(newItem);
+    if (wikiQueryName) pendingWikiLookups.push({ item: newItem, queryName: wikiQueryName });
   });
+
+  // Resolve any icons poe.ninja couldn't provide against the wiki, in parallel.
+  await Promise.all(pendingWikiLookups.map(async ({ item, queryName }) => {
+    item.icon = await getWikiItemIcon(queryName);
+  }));
 
   return items;
 }
