@@ -263,6 +263,7 @@ function bfsAllocatedOrder(startId: string, allocatedSet: Set<string>, nodeMap: 
  */
 export function generateBFSTreeRoadmap(pobData: any, nodeMap: TreeNodeMap): ReverseStage[] {
   const className: string = pobData.PathOfBuilding?.Build?.[0]?.$.className ?? '';
+  const ascendancyClass: string = pobData.PathOfBuilding?.Build?.[0]?.$.ascendClassName ?? '';
   const allNodeIds = getActiveNodeIds(pobData);
   const allocatedSet = new Set(allNodeIds);
 
@@ -272,6 +273,31 @@ export function generateBFSTreeRoadmap(pobData: any, nodeMap: TreeNodeMap): Reve
     return n && n.type !== 'Ascendancy';
   });
   const regularSet = new Set(regularNodeIds);
+
+  // Split ascendancy nodes into:
+  // - classAsc: nodes from the player's own ascendancy class, obtained from the 4 labs
+  // - altAsc: league-mechanic nodes (Farrul, Breachlord, Aul, etc.) that require
+  //           endgame map content, NOT labs — always go into the final Endgame stage
+  const classAscIds = ascNodeIds.filter(id => nodeMap[id]?.ascendancyName === ascendancyClass);
+  const altAscIds   = ascNodeIds.filter(id => nodeMap[id]?.ascendancyName !== ascendancyClass);
+  const classAscSet = new Set(classAscIds);
+
+  // The gateway node (named after the ascendancy class, e.g. "Necromancer") is
+  // auto-allocated when you first ascend — it costs no ascendancy points. We include
+  // it in cumulativeNodeIds (for the tree visualization) but NOT in newNodeIds (counts).
+  const gatewayId = classAscIds.find(id =>
+    nodeMap[id]?.name?.toLowerCase() === ascendancyClass.toLowerCase()
+  ) ?? null;
+
+  // BFS-order the class ascendancy nodes so shallower (earlier-lab) nodes come first.
+  // The entry node is identifiable as the one with an out-edge pointing outside the
+  // ascendancy set — that edge goes to the unallocated ascendancy gateway node.
+  const ascEntryId = classAscIds.find(id =>
+    (nodeMap[id]?.out ?? []).some(nid => !classAscSet.has(nid))
+  ) ?? classAscIds[0] ?? null;
+  const orderedClassAsc = ascEntryId
+    ? bfsAllocatedOrder(ascEntryId, classAscSet, nodeMap)
+    : classAscIds;
 
   // Find the class start node — it's the allocated node whose name matches the class.
   let startId: string | null = null;
@@ -300,13 +326,16 @@ export function generateBFSTreeRoadmap(pobData: any, nodeMap: TreeNodeMap): Reve
     ? bfsAllocatedOrder(startId, regularSet, nodeMap)
     : regularNodeIds;
 
-  // 2 ascendancy nodes per lab, distributed across stages 1–4 (stage 0 has no lab yet).
-  const ascPerLab = [
-    ascNodeIds.slice(0, 2),
-    ascNodeIds.slice(2, 4),
-    ascNodeIds.slice(4, 6),
-    ascNodeIds.slice(6, 8),
-  ];
+  // Each lab unlocks 1 ascendancy notable (plus any connector/path nodes needed to reach it).
+  // Walk the BFS-ordered class ascendancy list, advancing to the next lab each time we hit
+  // a notable node, so each stage gets at most 1 notable in its text breakdown.
+  const ascPerLab: string[][] = [[], [], [], []];
+  let labIdx = 0;
+  for (const id of orderedClassAsc) {
+    if (labIdx >= 4) { ascPerLab[3].push(id); continue; }
+    ascPerLab[labIdx].push(id);
+    if (nodeMap[id]?.isNotable && labIdx < 3) labIdx++;
+  }
 
   let cumulative: string[] = [];
   const stages: ReverseStage[] = [];
@@ -314,9 +343,15 @@ export function generateBFSTreeRoadmap(pobData: any, nodeMap: TreeNodeMap): Reve
   STAGE_DEFS.forEach((def, i) => {
     const prevCap = i === 0 ? 0 : STAGE_DEFS[i - 1].ptCap;
     const stageRegular = orderedRegularIds.slice(prevCap, def.ptCap);
-    const stageAsc = i > 0 ? (ascPerLab[i - 1] ?? []) : [];
-    const newNodeIds = [...stageRegular, ...stageAsc];
-    cumulative = [...cumulative, ...newNodeIds];
+    const baseAsc = i > 0 ? (ascPerLab[i - 1] ?? []) : [];
+    // League-mechanic ascendancy (Farrul, Breachlord, etc.) only unlocks via endgame
+    // map content, so push it all into the final Endgame stage.
+    const stageAsc = i === STAGE_DEFS.length - 1 ? [...baseAsc, ...altAscIds] : baseAsc;
+    // Exclude the gateway from the per-stage point count; it's auto-allocated on first
+    // ascension and costs no ascendancy points. It stays in cumulativeNodeIds so the
+    // tree visualization marks it as allocated.
+    const newNodeIds = [...stageRegular, ...stageAsc.filter(id => id !== gatewayId)];
+    cumulative = [...cumulative, ...stageRegular, ...stageAsc];
 
     const resolved = resolveNodes(newNodeIds, nodeMap);
     stages.push({
@@ -328,7 +363,7 @@ export function generateBFSTreeRoadmap(pobData: any, nodeMap: TreeNodeMap): Reve
       newNodeIds,
       newKeystones: resolved.filter(n => n.type === 'Keystone'),
       newNotables: resolved.filter(n => n.type === 'Notable'),
-      newAscendancy: resolved.filter(n => n.type === 'Ascendancy'),
+      newAscendancy: resolved.filter(n => n.type === 'Ascendancy' && n.isNotable),
       minorCount: newNodeIds.filter(id => nodeMap[id]?.type === 'Normal').length,
     });
   });

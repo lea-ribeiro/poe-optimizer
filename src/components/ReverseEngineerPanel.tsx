@@ -169,11 +169,31 @@ export default function ReverseEngineerPanel({
                   Ascendancy
                 </p>
                 {stage.newAscendancy.map(n => (
-                  <div key={n.id} className="p-3 bg-purple-950/15 border border-purple-900/30 rounded-xl">
-                    <p className="text-[12px] font-black text-purple-400">{n.name}</p>
-                    {n.stats && (
-                      <p className="text-[10px] text-slate-400 mt-1 leading-snug">{n.stats.join(' ')}</p>
-                    )}
+                  <div key={n.id} className="p-3 bg-purple-950/15 border border-purple-900/30 rounded-xl flex items-start gap-3">
+                    {n.spriteRect && (() => {
+                      const r = n.spriteRect!;
+                      const displaySize = 36;
+                      const scale = displaySize / r.w;
+                      return (
+                        <div
+                          style={{
+                            backgroundImage: `url(${r.sheetUrl})`,
+                            backgroundPosition: `-${Math.round(r.x * scale)}px -${Math.round(r.y * scale)}px`,
+                            backgroundSize: `${Math.round(r.sheetW * scale)}px ${Math.round(r.sheetH * scale)}px`,
+                            width: displaySize,
+                            height: displaySize,
+                          }}
+                          className="shrink-0 rounded overflow-hidden"
+                          title={n.name}
+                        />
+                      );
+                    })()}
+                    <div className="min-w-0">
+                      <p className="text-[12px] font-black text-purple-400">{n.name}</p>
+                      {n.stats && (
+                        <p className="text-[10px] text-slate-400 mt-1 leading-snug">{n.stats.join(' ')}</p>
+                      )}
+                    </div>
                   </div>
                 ))}
               </div>
@@ -208,7 +228,7 @@ export default function ReverseEngineerPanel({
           {/* Tree Visualization */}
           <div className="space-y-2">
             <p className="text-[9px] font-black text-slate-500 uppercase tracking-widest">
-              Passive Tree — Blue = already allocated · Green = allocate this stage
+              Passive Tree — Blue = allocated in previous stages · Green = allocate this stage
             </p>
             <TreeDiagram nodeMap={nodeMap} currentIds={prevIds} targetIds={stage.cumulativeNodeIds} />
           </div>

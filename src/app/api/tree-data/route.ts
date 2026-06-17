@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import axios from 'axios';
-import { TreeNodeInfo, TreeNodeMap, TreeNodeType } from '@/lib/tree-data';
+import { SpriteRect, TreeNodeInfo, TreeNodeMap, TreeNodeType } from '@/lib/tree-data';
 
 /**
  * Proxies + slims down GGG's official passive skill tree data.
@@ -13,8 +13,10 @@ import { TreeNodeInfo, TreeNodeMap, TreeNodeType } from '@/lib/tree-data';
 
 const TREE_URL = 'https://raw.githubusercontent.com/grindinggear/skilltree-export/master/data.json';
 const CACHE_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
+// Increment when TreeNodeInfo schema changes to force cache rebuild without restarting the server.
+const SCHEMA_VERSION = 4;
 
-let cache: { data: TreeNodeMap; fetchedAt: number } | null = null;
+let cache: { data: TreeNodeMap; fetchedAt: number; version: number } | null = null;
 
 
 /**
@@ -50,7 +52,15 @@ function classifyNode(raw: any, groups: any, orbitRadii: number[], skillsPerOrbi
 
   const info: TreeNodeInfo = { name: raw.name, type, x: position.x, y: position.y };
   if (raw.ascendancyName) info.ascendancyName = raw.ascendancyName;
-  if (Array.isArray(raw.out) && raw.out.length > 0) info.out = raw.out.map(String);
+  if (raw.isNotable) info.isNotable = true;
+  // spriteRect is populated by the caller after sprite data is parsed.
+  // The GGG export stores edges directionally: `out` lists edges going "outward" (away from
+  // the tree center) and `in` lists edges going "inward". The PoE passive tree is undirected,
+  // so BFS must follow both directions — combine them into a single adjacency list.
+  const outEdges: any[] = Array.isArray(raw.out) ? raw.out : [];
+  const inEdges: any[] = Array.isArray(raw['in']) ? raw['in'] : [];
+  const allEdges = [...outEdges, ...inEdges];
+  if (allEdges.length > 0) info.out = [...new Set(allEdges.map(String))];
   // Only keep stat text for the node types we actually surface in the UI; keeps payload small.
   if (type !== 'Normal' && Array.isArray(raw.stats) && raw.stats.length > 0) {
     info.stats = raw.stats;
@@ -61,6 +71,23 @@ function classifyNode(raw: any, groups: any, orbitRadii: number[], skillsPerOrbi
     info.masteryEffects = raw.masteryEffects.map((e: any) => ({ effect: e.effect, stats: e.stats || [] }));
   }
   return info;
+}
+
+/** Builds a map from icon path (Art/2DArt/...) to sprite rect, merging notableActive + keystoneActive. */
+function buildSpriteCoords(sprites: any): Map<string, SpriteRect> {
+  const map = new Map<string, SpriteRect>();
+  const ZOOM = '0.5';
+  for (const spriteKey of ['notableActive', 'keystoneActive']) {
+    const sheet = sprites?.[spriteKey]?.[ZOOM];
+    if (!sheet) continue;
+    const { filename: sheetUrl, w: sheetW, h: sheetH, coords } = sheet;
+    for (const [iconPath, rect] of Object.entries(coords as Record<string, any>)) {
+      if (!map.has(iconPath)) {
+        map.set(iconPath, { sheetUrl, sheetW, sheetH, x: rect.x, y: rect.y, w: rect.w, h: rect.h });
+      }
+    }
+  }
+  return map;
 }
 
 async function fetchAndBuildTreeData(): Promise<TreeNodeMap> {
@@ -83,11 +110,45 @@ async function fetchAndBuildTreeData(): Promise<TreeNodeMap> {
     throw new Error('Tree data response contained no nodes — data format may have changed.');
   }
 
+  const spriteCoords = buildSpriteCoords(parsed.sprites || {});
+  console.log(`[TreeDataProxy] Sprite map built: ${spriteCoords.size} icon entries`);
+
+  // In newer GGG exports the JSON key may differ from the numeric node ID that PoB
+  // exports (the `skill` field). Build a key→skill map so we can re-index correctly
+  // and convert the `out` edge arrays to use skill IDs as well.
+  const keyToSkill: Record<string, string> = {};
+  let hasMismatch = false;
+  for (const [id, raw] of Object.entries(rawNodes)) {
+    if (raw?.skill !== undefined) {
+      const skillStr = String(raw.skill);
+      keyToSkill[id] = skillStr;
+      if (skillStr !== id) hasMismatch = true;
+    }
+  }
+
   const slim: TreeNodeMap = {};
   for (const [id, raw] of Object.entries(rawNodes)) {
     const info = classifyNode(raw, groups, orbitRadii, skillsPerOrbit);
-    if (info) slim[id] = info;
+    if (!info) continue;
+
+    // Re-map out edges to skill IDs if the format uses a different primary key.
+    if (hasMismatch && info.out) {
+      info.out = info.out.map(neighborKey => keyToSkill[neighborKey] ?? neighborKey);
+    }
+
+    // Resolve icon path to sprite sheet crop coordinates.
+    const iconPath = raw.icon as string | undefined;
+    if (iconPath && (raw.isKeystone || (raw.ascendancyName && raw.isNotable))) {
+      const rect = spriteCoords.get(iconPath);
+      if (rect) info.spriteRect = rect;
+    }
+
+    const skillId = keyToSkill[id] ?? id;
+    slim[skillId] = info;
   }
+
+  const sampleKeys = Object.keys(slim).slice(0, 5);
+  console.log(`[TreeDataProxy] Built nodeMap: ${Object.keys(slim).length} nodes. hasMismatch=${hasMismatch}. Sample IDs: ${sampleKeys.join(', ')}`);
 
   return slim;
 }
@@ -95,14 +156,14 @@ async function fetchAndBuildTreeData(): Promise<TreeNodeMap> {
 export async function GET() {
   const now = Date.now();
 
-  if (cache && now - cache.fetchedAt < CACHE_TTL_MS) {
+  if (cache && now - cache.fetchedAt < CACHE_TTL_MS && cache.version === SCHEMA_VERSION) {
     return NextResponse.json(cache.data);
   }
 
   try {
     console.log('[TreeDataProxy] Fetching fresh passive tree data...');
     const data = await fetchAndBuildTreeData();
-    cache = { data, fetchedAt: now };
+    cache = { data, fetchedAt: now, version: SCHEMA_VERSION };
     return NextResponse.json(data);
   } catch (error: any) {
     console.error('[TreeDataProxy] Fetch failed:', error.message);

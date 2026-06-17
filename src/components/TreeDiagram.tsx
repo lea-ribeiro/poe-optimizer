@@ -20,7 +20,7 @@ const STATUS_COLOR: Record<Status, string> = {
 const PADDING = 400;
 const BG_NODE_R = 16;
 const BG_EDGE_COLOR = '#1e293b';
-const BIG_NODE_TYPES = new Set(['Keystone', 'Notable', 'Ascendancy']);
+const BIG_NODE_TYPES = new Set(['Keystone', 'Notable']);
 
 function statusOf(id: string, currentSet: Set<string>, targetSet: Set<string>): Status | null {
   const inCurrent = currentSet.has(id);
@@ -89,12 +89,13 @@ export default function TreeDiagram({ nodeMap, currentIds, targetIds }: Props) {
   );
 }
 
-function TreePanel({ title, entries, currentSet, targetSet, focusOnHighlighted }: {
+function TreePanel({ title, entries, currentSet, targetSet, focusOnHighlighted, relaxEdgeHighlight = false }: {
   title: string;
   entries: [string, TreeNodeMap[string]][];
   currentSet: Set<string>;
   targetSet: Set<string>;
   focusOnHighlighted: boolean;
+  relaxEdgeHighlight?: boolean;
 }) {
   const gRef = useRef<SVGGElement>(null);
   const transform = useRef({ x: 0, y: 0, scale: 1 });
@@ -191,20 +192,27 @@ function TreePanel({ title, entries, currentSet, targetSet, focusOnHighlighted }
             {entries.map(([id, info]) => (info.out || []).map(targetId => {
               const status = nodeStatus(id);
               const otherStatus = nodeStatus(targetId);
-              if (!status || !otherStatus) return null;
+              // Relaxed mode (ascendancy panels): show edge if either endpoint is highlighted,
+              // so paths from allocated nodes are visible even through unallocated connectors.
+              if (relaxEdgeHighlight ? (!status && !otherStatus) : (!status || !otherStatus)) return null;
               const other = nodeMapById.get(targetId);
               if (!other) return null;
-              const color = status === 'add' || otherStatus === 'add' ? STATUS_COLOR.add
-                : status === 'remove' || otherStatus === 'remove' ? STATUS_COLOR.remove
+              const effectiveStatus = status ?? otherStatus;
+              const color = effectiveStatus === 'add' ? STATUS_COLOR.add
+                : effectiveStatus === 'remove' ? STATUS_COLOR.remove
                 : STATUS_COLOR.shared;
+              const opacity = (status !== null && otherStatus !== null) ? 0.85 : 0.4;
               return (
-                <line key={`hl-${id}-${targetId}`} x1={info.x} y1={info.y} x2={other.x} y2={other.y} stroke={color} strokeWidth={14} opacity={0.85} />
+                <line key={`hl-${id}-${targetId}`} x1={info.x} y1={info.y} x2={other.x} y2={other.y} stroke={color} strokeWidth={14} opacity={opacity} />
               );
             }))}
             {entries.map(([id, info]) => {
               const status = nodeStatus(id);
               if (!status) return null;
-              const isBig = BIG_NODE_TYPES.has(info.type);
+              // In ascendancy panels: skip connector/path nodes — only notables carry real info.
+              const isAscNotable = info.type === 'Ascendancy' && info.isNotable;
+              if (relaxEdgeHighlight && info.type === 'Ascendancy' && !isAscNotable) return null;
+              const isBig = BIG_NODE_TYPES.has(info.type) || isAscNotable;
               const r = isBig ? 42 : 22;
               return (
                 <g key={id}>
@@ -224,8 +232,8 @@ function TreePanel({ title, entries, currentSet, targetSet, focusOnHighlighted }
       </svg>
 
       <div className="flex gap-5 px-5 py-3 border-t border-slate-800 text-[10px] font-bold uppercase tracking-tighter">
-        <span className="flex items-center gap-1.5 text-blue-400"><span className="w-2.5 h-2.5 rounded-full bg-blue-400" />Shared</span>
-        <span className="flex items-center gap-1.5 text-green-400"><span className="w-2.5 h-2.5 rounded-full bg-green-400" />Allocate</span>
+        <span className="flex items-center gap-1.5 text-blue-400"><span className="w-2.5 h-2.5 rounded-full bg-blue-400" />Allocated</span>
+        <span className="flex items-center gap-1.5 text-green-400"><span className="w-2.5 h-2.5 rounded-full bg-green-400" />Allocate now</span>
         <span className="flex items-center gap-1.5 text-red-400"><span className="w-2.5 h-2.5 rounded-full bg-red-400" />Deallocate</span>
         <span className="text-slate-600">Drag to pan, +/− to zoom</span>
       </div>
