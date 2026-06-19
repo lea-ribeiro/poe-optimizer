@@ -5,13 +5,15 @@ import { processPoB } from '@/lib/pob-decoder';
 import { analyzeBuildItems, BuildItem, compareItems, ModComparison } from '@/lib/item-analyzer';
 import { getActiveNodeIds, getKeystones, compareTrees, TreeNodeEntry, TreeDiffResult, getMasterySelections, compareMasterySelections, MasteryDiffEntry, generateBFSTreeRoadmap, ReverseStage, compareClusterJewelNotables, ClusterJewelDiff } from '@/lib/tree-engine';
 import { getTreeNodeMap, TreeNodeMap } from '@/lib/tree-data';
-import TreeDiagram from '@/components/TreeDiagram';
 import ReverseEngineerPanel from '@/components/ReverseEngineerPanel';
 import { analyzeBuildArchetype, BuildArchetype } from '@/lib/pob-analyzer';
 import { analyzeBuildGems, GemGroup } from '@/lib/gem-analyzer';
 import { useSavedPoBs } from '@/hooks/useSavedPoBs';
 import SavedPoBPanel from '@/components/SavedPoBPanel';
-import BuildPanel, { ItemDisplay, getRarityColor, getModColor, cleanMod } from '@/components/BuildPanel';
+import BuildPanel, { getRarityColor } from '@/components/BuildPanel';
+import GearMatchUpSection from '@/components/GearMatchUpSection';
+import TreeComparisonSection from '@/components/TreeComparisonSection';
+import SocketLinksSection from '@/components/SocketLinksSection';
 
 export default function Home() {
   const [activeTab, setActiveTab] = useState<'optimize' | 'reverse'>('optimize');
@@ -114,7 +116,7 @@ export default function Home() {
       setBuildData(result);
       const arch = analyzeBuildArchetype(result);
       setArchetype(arch);
-      const currentItems = await analyzeBuildItems(result, arch.mainSkillName, 'Optimize');
+      const currentItems = await analyzeBuildItems(result, arch.mainSkillName);
       setAnalyzedItems(currentItems);
       setGemGroups(await analyzeBuildGems(result));
 
@@ -127,7 +129,7 @@ export default function Home() {
         setTargetBuildData(tResult);
         const tArch = analyzeBuildArchetype(tResult);
         setTargetArchetype(tArch);
-        const tItems = await analyzeBuildItems(tResult, tArch.mainSkillName, 'Optimize');
+        const tItems = await analyzeBuildItems(tResult, tArch.mainSkillName);
         setTargetAnalyzedItems(tItems);
         setTargetGemGroups(await analyzeBuildGems(tResult));
 
@@ -178,7 +180,7 @@ export default function Home() {
       const arch = analyzeBuildArchetype(result);
       setReverseArchetype(arch);
 
-      const items = await analyzeBuildItems(result, arch.mainSkillName, 'Optimize');
+      const items = await analyzeBuildItems(result, arch.mainSkillName);
       setReverseItems(items);
 
       const gems = await analyzeBuildGems(result);
@@ -221,7 +223,7 @@ export default function Home() {
         }
       }
 
-      const isMatched = current && target && (current.name.toLowerCase() === target.name.toLowerCase());
+      const isMatched = !!(current && target && current.name.toLowerCase() === target.name.toLowerCase());
       const mods = compareItems(current, target);
       const upgrades = mods.filter(m => m.type !== 'Match');
       
@@ -542,299 +544,34 @@ export default function Home() {
 
               {/* 1:1 COMPARISON SECTION */}
               {targetBuildData && (
-                <section className="bg-slate-900 rounded-3xl border border-amber-900/30 shadow-xl overflow-visible">
-                  <button onClick={() => toggleSection('comparison')} className="w-full p-8 flex justify-between items-center hover:bg-white/5 transition-colors rounded-t-3xl">
-                    <div className="flex items-center gap-4 text-left">
-                      <div className="w-12 h-12 rounded-full bg-amber-600 flex items-center justify-center shadow-lg text-2xl">⚖️</div>
-                      <div><h2 className="text-3xl font-black text-white uppercase tracking-tighter leading-none">Gear Match-Up</h2><p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest mt-1">Surgical Mod Comparison</p></div>
-                    </div>
-                    <span className="text-2xl text-slate-600">{sections.comparison ? '−' : '+'}</span>
-                  </button>
-                  {sections.comparison && (
-                    <div className="p-8 pt-0 animate-in slide-in-from-top-4 duration-500">
-                      <div className="grid grid-cols-1 gap-6">
-                        {gearComparison.map((g, idx) => (
-                          <div key={idx} className={`flex flex-col p-6 bg-slate-950 rounded-[2rem] border transition-all ${g.isMatched ? 'border-green-900/20' : 'border-white/5'}`}>
-                            <div className="flex items-center gap-8 mb-6">
-                              <div className="w-24 text-[11px] font-black text-amber-500 uppercase tracking-tighter text-center">{g.slot}</div>
-                              <div className="flex-1 flex justify-between items-center gap-12">
-                                <div className="flex-1 flex items-center justify-center gap-12">
-                                  <ItemDisplay item={g.current} label="My Progress" />
-                                  <div className={`text-2xl font-black ${g.isMatched ? 'text-green-500/30' : 'text-red-500/30'}`}>→</div>
-                                  <ItemDisplay item={g.target} label="Target Goal" />
-                                </div>
-                                <div className="min-w-[150px] text-right">
-                                  <span className={`text-[11px] font-black px-4 py-2 rounded-full uppercase tracking-widest inline-block whitespace-nowrap ${g.upgrades.length === 0 ? 'text-green-500 bg-green-500/10' : 'text-amber-500 bg-amber-500/10 animate-pulse'}`}>
-                                    {g.upgrades.length === 0 ? 'Perfect Match' : `${g.upgrades.length} Improvements`}
-                                  </span>
-                                </div>
-                              </div>
-                            </div>
-                            
-                            {/* MOD COMPARISON LIST */}
-                            {g.upgrades.length > 0 && (
-                              <div className="mt-4 pt-6 border-t border-white/5 space-y-6">
-                                {/* UNIQUE TRANSITION CASE */}
-                                {g.target?.rarity === 'UNIQUE' && g.current?.rarity !== 'UNIQUE' ? (
-                                  <div className="p-4 bg-purple-950/10 border border-purple-900/30 rounded-2xl flex flex-col items-center gap-2 text-center">
-                                    <p className="text-[11px] font-black text-purple-400 uppercase tracking-widest">Major Upgrade: Transition to Unique</p>
-                                    <p className="text-[13px] text-slate-300">Replace your rare item with <span className="text-amber-500 font-bold">{g.target.name}</span> for build-critical scaling.</p>
-                                    {g.target.estimatedPrice && (
-                                      <p className="text-[10px] font-black text-amber-500 uppercase">Estimated Cost: {Math.round(g.target.estimatedPrice)} Chaos</p>
-                                    )}
-                                  </div>
-                                ) : (
-                                  <>
-                                    {/* PRIORITY: MISSING MODS */}
-                                    {g.upgrades.filter(u => u.type === 'Missing').length > 0 && (
-                                      <div className="space-y-3">
-                                        <div className="flex items-center gap-2">
-                                          <span className="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse"></span>
-                                          <p className="text-[10px] font-black text-red-500 uppercase tracking-widest">Critical: Missing Modifiers</p>
-                                        </div>
-                                        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                                          {g.upgrades.filter(u => u.type === 'Missing').map((u, uIdx) => (
-                                            <div key={uIdx} className="p-4 bg-red-950/10 border border-red-900/20 rounded-2xl flex items-start gap-3">
-                                              <div className="space-y-1">
-                                                <p className={`text-[13px] font-bold leading-tight ${getModColor(u.mod)}`}>{cleanMod(u.mod)}</p>
-                                                <p className="text-[10px] font-black uppercase text-red-400/70 tracking-tighter">Your item lacks this essential stat</p>
-                                              </div>
-                                            </div>
-                                          ))}
-                                        </div>
-                                      </div>
-                                    )}
-
-                                    {/* OPTIMIZATIONS: TIER/VALUE UPGRADES */}
-                                    {g.upgrades.filter(u => u.type !== 'Missing').length > 0 && (
-                                      <div className="space-y-3">
-                                        <div className="flex items-center gap-2">
-                                          <span className="w-1.5 h-1.5 rounded-full bg-amber-500"></span>
-                                          <p className="text-[10px] font-black text-amber-500 uppercase tracking-widest">Performance: Stat Upgrades</p>
-                                        </div>
-                                        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                                          {g.upgrades.filter(u => u.type !== 'Missing').map((u, uIdx) => (
-                                            <div key={uIdx} className="p-4 bg-amber-950/10 border border-amber-900/20 rounded-2xl flex items-start gap-3">
-                                              <div className="space-y-2">
-                                                <p className={`text-[13px] font-bold leading-tight ${getModColor(u.mod)}`}>{cleanMod(u.mod)}</p>
-                                                <div className="flex items-center gap-3">
-                                                  <span className="px-2 py-0.5 bg-slate-900 rounded text-[11px] text-slate-500 font-mono">{u.currentValue}</span>
-                                                  <span className="text-amber-500 text-xs">→</span>
-                                                  <span className="px-2 py-0.5 bg-amber-500/20 rounded text-[11px] text-amber-400 font-mono font-black">{u.targetValue}</span>
-                                                </div>
-                                              </div>
-                                            </div>
-                                          ))}
-                                        </div>
-                                      </div>
-                                    )}
-                                  </>
-                                )}
-                              </div>
-                            )}
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-                </section>
+                <GearMatchUpSection
+                  gearComparison={gearComparison}
+                  isOpen={sections.comparison}
+                  onToggle={() => toggleSection('comparison')}
+                />
               )}
 
               {/* TREE COMPARISON SECTION */}
               {targetBuildData && treeDiff && (
-                <section className="bg-slate-900 rounded-3xl border border-slate-800 shadow-xl overflow-visible">
-                  <button onClick={() => toggleSection('tree')} className="w-full p-8 flex justify-between items-center hover:bg-white/5 transition-colors rounded-t-3xl">
-                    <div className="flex items-center gap-4 text-left">
-                      <div className="w-12 h-12 rounded-full bg-amber-600 flex items-center justify-center shadow-lg text-2xl">🌳</div>
-                      <div><h2 className="text-3xl font-black text-white uppercase tracking-tighter leading-none">Tree Comparison</h2><p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest mt-1">Passive Allocation Differences</p></div>
-                    </div>
-                    <span className="text-2xl text-slate-600">{sections.tree ? '−' : '+'}</span>
-                  </button>
-                  {sections.tree && (
-                    <div className="p-8 pt-0 space-y-8 animate-in slide-in-from-top-4 duration-500">
-                      <TreeDiagram nodeMap={treeNodeMap} currentIds={currentNodeIds} targetIds={targetNodeIds} />
-
-                      {([
-                        { label: 'Keystones', added: treeDiff.keystonesOnlyInTarget, removed: treeDiff.keystonesOnlyInCurrent },
-                        { label: 'Notables', added: treeDiff.notablesOnlyInTarget, removed: treeDiff.notablesOnlyInCurrent },
-                        { label: 'Ascendancy', added: treeDiff.ascendancyOnlyInTarget, removed: treeDiff.ascendancyOnlyInCurrent },
-                      ] as { label: string, added: TreeNodeEntry[], removed: TreeNodeEntry[] }[]).map(({ label, added, removed }) => (
-                        (added.length > 0 || removed.length > 0) && (
-                          <div key={label} className="space-y-3">
-                            <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest border-b border-white/5 pb-2">{label}</p>
-                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                              <div className="space-y-2">
-                                {added.length === 0 ? (
-                                  <p className="text-[11px] text-slate-600 italic">No {label.toLowerCase()} to allocate.</p>
-                                ) : added.map(n => (
-                                  <div key={n.id} className="p-3 bg-green-950/10 border border-green-900/20 rounded-xl">
-                                    <p className="text-[12px] font-bold text-green-400">+ {n.name}</p>
-                                    {n.stats && <p className="text-[10px] text-slate-400 mt-1 leading-snug">{n.stats.join(' ')}</p>}
-                                  </div>
-                                ))}
-                              </div>
-                              <div className="space-y-2">
-                                {removed.length === 0 ? (
-                                  <p className="text-[11px] text-slate-600 italic">Nothing to deallocate.</p>
-                                ) : removed.map(n => (
-                                  <div key={n.id} className="p-3 bg-red-950/10 border border-red-900/20 rounded-xl opacity-70">
-                                    <p className="text-[12px] font-bold text-red-400">− {n.name}</p>
-                                    {n.stats && <p className="text-[10px] text-slate-400 mt-1 leading-snug">{n.stats.join(' ')}</p>}
-                                  </div>
-                                ))}
-                              </div>
-                            </div>
-                          </div>
-                        )
-                      ))}
-
-                      {masteryDiff.length > 0 && (
-                        <div className="space-y-3">
-                          <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest border-b border-white/5 pb-2">Masteries</p>
-                          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                            {masteryDiff.map(m => (
-                              <div key={m.nodeId} className={`p-3 rounded-xl border ${m.status === 'removed' ? 'bg-red-950/10 border-red-900/20 opacity-70' : m.status === 'added' ? 'bg-green-950/10 border-green-900/20' : 'bg-amber-950/10 border-amber-900/20'}`}>
-                                <p className={`text-[12px] font-bold ${m.status === 'removed' ? 'text-red-400' : m.status === 'added' ? 'text-green-400' : 'text-amber-400'}`}>
-                                  {m.status === 'added' ? '+ ' : m.status === 'removed' ? '− ' : ''}{m.masteryName}
-                                </p>
-                                {m.status === 'changed' ? (
-                                  <div className="text-[10px] text-slate-400 mt-1 leading-snug space-y-1">
-                                    <p><span className="text-slate-600 uppercase font-black">Current: </span>{m.currentEffect}</p>
-                                    <p><span className="text-amber-500 uppercase font-black">Target: </span>{m.targetEffect}</p>
-                                  </div>
-                                ) : (
-                                  <p className="text-[10px] text-slate-400 mt-1 leading-snug">{m.currentEffect || m.targetEffect}</p>
-                                )}
-                              </div>
-                            ))}
-                          </div>
-                        </div>
-                      )}
-
-                      {clusterDiff && (clusterDiff.onlyInTarget.length > 0 || clusterDiff.onlyInCurrent.length > 0) && (
-                        <div className="space-y-3">
-                          <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest border-b border-white/5 pb-2">Cluster Jewel Notables</p>
-                          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                            <div className="space-y-2">
-                              {clusterDiff.onlyInTarget.length === 0 ? (
-                                <p className="text-[11px] text-slate-600 italic">No new cluster notables.</p>
-                              ) : clusterDiff.onlyInTarget.map((name, i) => (
-                                <div key={i} className="p-3 bg-green-950/10 border border-green-900/20 rounded-xl">
-                                  <p className="text-[12px] font-bold text-green-400">+ {name}</p>
-                                </div>
-                              ))}
-                            </div>
-                            <div className="space-y-2">
-                              {clusterDiff.onlyInCurrent.length === 0 ? (
-                                <p className="text-[11px] text-slate-600 italic">Nothing to remove.</p>
-                              ) : clusterDiff.onlyInCurrent.map((name, i) => (
-                                <div key={i} className="p-3 bg-red-950/10 border border-red-900/20 rounded-xl opacity-70">
-                                  <p className="text-[12px] font-bold text-red-400">− {name}</p>
-                                </div>
-                              ))}
-                            </div>
-                          </div>
-                        </div>
-                      )}
-
-                      <div className="pt-4 border-t border-white/5 flex flex-wrap gap-4 text-[10px] font-bold uppercase tracking-tighter text-slate-500">
-                        <span>{treeDiff.sharedNodeCount} shared nodes</span>
-                        <span className="text-green-500/70">+{treeDiff.minorNodesOnlyInTargetCount} minor nodes to allocate</span>
-                        <span className="text-red-500/70">−{treeDiff.minorNodesOnlyInCurrentCount} minor nodes to deallocate</span>
-                        {(treeDiff.unresolvedOnlyInTargetCount > 0 || treeDiff.unresolvedOnlyInCurrentCount > 0) && (
-                          <span className="text-slate-600">
-                            {treeDiff.unresolvedOnlyInTargetCount + treeDiff.unresolvedOnlyInCurrentCount} unresolved nodes (excluding named cluster notables above)
-                          </span>
-                        )}
-                      </div>
-                    </div>
-                  )}
-                </section>
+                <TreeComparisonSection
+                  treeDiff={treeDiff}
+                  treeNodeMap={treeNodeMap}
+                  currentNodeIds={currentNodeIds}
+                  targetNodeIds={targetNodeIds}
+                  masteryDiff={masteryDiff}
+                  clusterDiff={clusterDiff}
+                  isOpen={sections.tree}
+                  onToggle={() => toggleSection('tree')}
+                />
               )}
 
               {/* SOCKET LINKS SECTION */}
-              <section className="bg-slate-900 rounded-3xl border border-slate-800 shadow-xl overflow-visible">
-                <button onClick={() => toggleSection('sockets')} className="w-full p-8 flex justify-between items-center hover:bg-white/5 transition-colors rounded-t-3xl">
-                  <div className="flex items-center gap-4 text-left">
-                    <div className="w-12 h-12 rounded-full bg-blue-600 flex items-center justify-center shadow-lg text-2xl">💎</div>
-                    <div><h2 className="text-3xl font-black text-white uppercase tracking-tighter leading-none">Socket Links</h2><p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest mt-1">Gem Configuration Matrix</p></div>
-                  </div>
-                  <span className="text-2xl text-slate-600">{sections.sockets ? '−' : '+'}</span>
-                </button>
-                {sections.sockets && (
-                  <div className="p-8 pt-0 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 animate-in slide-in-from-top-4 duration-500">
-                    {Array.from(new Set([...gemGroups.map(g => g.slot), ...targetGemGroups.map(g => g.slot)])).map((slot, idx) => {
-                      const group = gemGroups.find(g => g.slot === slot);
-                      const targetGroup = targetGemGroups.find(tg => tg.slot === slot);
-                      const missingGems = targetGroup?.gems.filter(tg => !group?.gems.some(g => g.name.toLowerCase() === tg.name.toLowerCase())) || [];
-                      const linksGap = targetGroup && group && targetGroup.links > group.links;
-
-                      return (
-                        <div key={idx} className="bg-slate-950 border border-slate-800 rounded-3xl overflow-hidden hover:border-blue-500/30 transition-colors shadow-xl flex flex-col">
-                          <div className="bg-slate-900 px-5 py-4 border-b border-slate-800 flex justify-between items-center">
-                            <h4 className="text-xs font-black text-amber-500 uppercase tracking-widest">{slot}</h4>
-                            {linksGap ? (
-                              <span className="text-[10px] font-black uppercase tracking-widest">
-                                <span className="text-slate-500">{group!.links}</span>
-                                <span className="text-amber-500"> → {targetGroup!.links} Links</span>
-                              </span>
-                            ) : (
-                              <span className="text-[10px] font-black text-blue-500 uppercase tracking-widest">{(group || targetGroup)!.links} Links</span>
-                            )}
-                          </div>
-                          <div className="p-5 space-y-3 flex-1">
-                            {!group && (
-                              <p className="text-[10px] text-red-400 font-black uppercase tracking-tighter mb-2">You don't have this set up yet</p>
-                            )}
-                            {(group?.gems || []).map((gem, gIdx) => {
-                              const targetGem = targetGroup?.gems.find(tg => tg.name.toLowerCase() === gem.name.toLowerCase());
-                              const isUpgrade = targetGem && (targetGem.level > gem.level || targetGem.quality > gem.quality);
-                              const displayPrice = isUpgrade ? targetGem?.price : gem.price;
-
-                              return (
-                                <div key={gIdx} className="flex flex-col py-1.5 border-b border-white/[0.02] last:border-0">
-                                  <div className="flex justify-between items-center text-[11px]">
-                                    <span className={`font-black ${isUpgrade ? 'text-amber-400' : 'text-slate-200'}`}>{gem.name}</span>
-                                    <div className="flex items-center gap-2">
-                                      <span className="text-slate-600 font-mono font-bold tracking-tighter">
-                                        {gem.level}/{gem.quality}%
-                                      </span>
-                                      {isUpgrade && (
-                                        <>
-                                          <span className="text-amber-500 text-[10px]">→</span>
-                                          <span className="text-amber-400 font-mono font-bold tracking-tighter">
-                                            {targetGem.level}/{targetGem.quality}%
-                                          </span>
-                                        </>
-                                      )}
-                                      {displayPrice && displayPrice > 1 && (
-                                        <span className="text-[9px] text-amber-500/60 font-mono">~{Math.round(displayPrice)}c</span>
-                                      )}
-                                    </div>
-                                  </div>
-                                </div>
-                              );
-                            })}
-                            {missingGems.map((gem, gIdx) => (
-                              <div key={`missing-${gIdx}`} className="flex flex-col py-1.5 border-b border-white/[0.02] last:border-0">
-                                <div className="flex justify-between items-center text-[11px]">
-                                  <span className="font-black text-red-400">+ {gem.name}</span>
-                                  <div className="flex items-center gap-2">
-                                    <span className="text-red-400/70 font-mono font-bold tracking-tighter">{gem.level}/{gem.quality}%</span>
-                                    {gem.price && gem.price > 1 && (
-                                      <span className="text-[9px] text-amber-500/60 font-mono">~{Math.round(gem.price)}c</span>
-                                    )}
-                                  </div>
-                                </div>
-                              </div>
-                            ))}
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
-              </section>
+              <SocketLinksSection
+                gemGroups={gemGroups}
+                targetGemGroups={targetGemGroups}
+                isOpen={sections.sockets}
+                onToggle={() => toggleSection('sockets')}
+              />
 
             </div>
           </div>

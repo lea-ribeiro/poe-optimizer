@@ -1,23 +1,19 @@
 import { PoEItem, getPoENinjaItems, getCurrentLeague } from './poe-ninja';
-import { getProgressionForSkill, ProgressionTier } from './meta-data';
 import { getWikiItemIcon } from './wiki-images';
 
 export type BuildItem = {
   name: string;
   slot: string;
   rarity: string;
-  isMandatory: boolean;
-  tier: ProgressionTier;
   icon?: string;
   type: 'Gear' | 'Flask' | 'Jewel';
   estimatedPrice?: number;
   levelRequirement?: number;
-  progressionNote?: string;
   prefixes?: string[];
   suffixes?: string[];
   implicits?: string[];
   explicits?: string[];
-  debugInfo?: string; // For troubleshooting classification
+  debugInfo?: string;
 };
 
 /**
@@ -168,7 +164,7 @@ function guessWikiPageTitle(name: string, type: BuildItem['type'], itemTextLow: 
 /**
  * Analyzes items from PoB data and cross-references with poe.ninja prices.
  */
-export async function analyzeBuildItems(pobData: any, mainSkill?: string, mode: 'Optimize' | 'Reverse' = 'Optimize'): Promise<BuildItem[]> {
+export async function analyzeBuildItems(pobData: any, mainSkill?: string): Promise<BuildItem[]> {
   const items: BuildItem[] = [];
   const pendingWikiLookups: { item: BuildItem, queryName: string }[] = [];
   const league = await getCurrentLeague();
@@ -228,8 +224,6 @@ export async function analyzeBuildItems(pobData: any, mainSkill?: string, mode: 
   const topLevelSlotsRaw = itemsContainer.Slot || [];
   const topLevelSlots = Array.isArray(topLevelSlotsRaw) ? topLevelSlotsRaw : [topLevelSlotsRaw];
   addSlots(topLevelSlots);
-
-  const metaProgression = mainSkill ? getProgressionForSkill(mainSkill) : undefined;
 
   pobItems.forEach((itemObj: any) => {
     const itemRaw = itemObj._ || itemObj;
@@ -383,29 +377,14 @@ export async function analyzeBuildItems(pobData: any, mainSkill?: string, mode: 
     // aren't traded/tracked there) get resolved against the wiki below, after this loop.
     const wikiQueryName = icon ? undefined : guessWikiPageTitle(name, type, itemText.toLowerCase());
 
-    let metaMandatory = false;
-    if (metaProgression) {
-      metaProgression.slots.forEach(s => {
-        const step = s.steps.find(st => name.toLowerCase().includes(st.itemName.toLowerCase()));
-        if (step) metaMandatory = step.isMandatory || false;
-      });
-    }
-
-    let tier: ProgressionTier = 'Budget';
-    if (price > 1000) tier = 'Luxury';
-    else if (price > 100 || rarity === 'UNIQUE') tier = 'Core';
-
     const newItem: BuildItem = {
       name,
       slot,
       rarity,
-      isMandatory: metaMandatory || price > 50,
-      tier,
       icon,
       type,
       estimatedPrice: price,
       levelRequirement,
-      progressionNote: rarity === 'UNIQUE' ? 'Core Unique for scaling.' : 'High-end Rare component.',
       prefixes,
       suffixes,
       implicits,
