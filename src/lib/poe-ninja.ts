@@ -31,7 +31,7 @@ export async function getPoENinjaItems(league: string, type: string): Promise<Po
       divineValue: item.divineValue,
       listingCount: item.listingCount,
       icon: item.icon,
-      variant: item.gemLevel ? `${item.gemLevel}/${item.gemQuality}` : undefined
+      variant: item.gemLevel ? `${item.gemLevel}/${item.gemQuality}` : (item.variant ?? undefined)
     }));
   } catch (error) {
     console.error(`Error fetching proxy items (${type}):`, error);

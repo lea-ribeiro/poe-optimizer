@@ -2,7 +2,6 @@
  * PoB Analyzer: Extracts intelligence from the decoded PoB object
  */
 
-import { ArchetypeProgression, BenchmarkInfo, getProgressionForSkill } from './meta-data';
 
 /**
  * PoB does not export a per-damage-type DPS breakdown anywhere in its saved XML (verified
@@ -42,13 +41,6 @@ export type BuildArchetype = {
   damageType: 'Elemental' | 'Chaos' | 'Physical';
   totalDPS: number;
   breakdown: { chaos: number, ele: number, phys: number };
-};
-
-export type OptimizationInsight = {
-  category: 'Missing' | 'Upgrade' | 'Meta Shift';
-  item: string;
-  description: string;
-  type: BenchmarkInfo['type'];
 };
 
 export function analyzeBuildArchetype(pobData: any): BuildArchetype {
@@ -183,36 +175,3 @@ export function analyzeBuildArchetype(pobData: any): BuildArchetype {
   };
 }
 
-export function generateOptimizationReport(pobData: any, archetype: BuildArchetype): OptimizationInsight[] {
-  const insights: OptimizationInsight[] = [];
-  const meta = getProgressionForSkill(archetype.mainSkillName);
-  if (!meta) return [];
-  const pobString = JSON.stringify(pobData).toLowerCase();
-
-  meta.benchmarks.forEach(bench => {
-    if (bench.damageType && bench.damageType !== 'Any' && bench.damageType !== archetype.damageType) return;
-    const isPresent = pobString.includes(bench.name.toLowerCase());
-    const isRedundant = bench.redundantWith && pobString.includes(bench.redundantWith.toLowerCase());
-    if (!isPresent && !isRedundant) {
-      insights.push({ category: 'Missing', item: bench.name, description: bench.description, type: bench.type });
-    }
-  });
-
-  meta.slots.forEach(slot => {
-    slot.steps.forEach(step => {
-      if (step.damageType && step.damageType !== 'Any' && step.damageType !== archetype.damageType) return;
-      if (step.isMandatory && step.tier !== 'Budget') {
-        if (!pobString.includes(step.itemName.toLowerCase())) {
-          insights.push({ category: 'Missing', item: step.itemName, description: step.description, type: 'Item' });
-        }
-      }
-    });
-  });
-  return insights;
-}
-
-export function getDynamicTips(archetype: BuildArchetype, stageLevel: number): string[] {
-  const tips: string[] = [];
-  if (stageLevel === 90) tips.push(`Refine your ${archetype.mainSkillName} links (look for 21/20 gems).`);
-  return tips;
-}

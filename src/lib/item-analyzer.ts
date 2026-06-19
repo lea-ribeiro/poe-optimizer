@@ -334,20 +334,49 @@ export async function analyzeBuildItems(pobData: any, mainSkill?: string, mode: 
     let icon = marketItem?.icon;
 
     if (rarity === 'RARE' || rarity === 'MAGIC' || !icon) {
-      const lines = itemRaw.split('\n').map(l => l.trim()).filter(l => l.length > 0);
-      for (const line of lines) {
+      // Detect influence and special properties from item text
+      const influence = itemText.includes('shaper item') ? 'Shaper'
+        : itemText.includes('elder item') ? 'Elder'
+        : itemText.includes('crusader item') ? 'Crusader'
+        : itemText.includes('redeemer item') ? 'Redeemer'
+        : itemText.includes('hunter item') ? 'Hunter'
+        : itemText.includes('warlord item') ? 'Warlord'
+        : null;
+      const isFractured = itemText.includes('{fractured}') || itemText.includes('fractured item');
+      const is6L = /Sockets:\s*[RGBW]-[RGBW]-[RGBW]-[RGBW]-[RGBW]-[RGBW]/i.test(itemRaw);
+
+      const itemLines = itemRaw.split('\n').map(l => l.trim()).filter(l => l.length > 0);
+      for (const line of itemLines) {
         if (line.toUpperCase().startsWith('RARITY:')) continue;
         const cleanLine = line.toLowerCase();
-        const match = allBaseTypes.find(b => {
+        // Prefer an influence-matched variant, fall back to non-influenced base
+        let bestMatch: PoEItem | null = null;
+        for (const b of allBaseTypes) {
           const bName = b.name.toLowerCase();
-          return cleanLine === bName || cleanLine.includes(bName);
-        });
-        if (match) {
-          icon = match.icon;
+          if (cleanLine === bName || cleanLine.includes(bName)) {
+            if (influence && b.variant === influence) { bestMatch = b; break; }
+            if (!bestMatch) bestMatch = b;
+          }
+        }
+        if (bestMatch) {
+          icon = bestMatch.icon;
+          if (price === 0 && bestMatch.chaosValue > 0) price = bestMatch.chaosValue;
           break;
         }
       }
 
+      // Heuristic floor for rares poe.ninja doesn't individually track
+      if (price === 0 && rarity === 'RARE') {
+        const allMods = [...prefixes, ...suffixes];
+        const t1Count = allMods.filter(m => m.includes('(Tier: 1)')).length;
+        const t2Count = allMods.filter(m => m.includes('(Tier: 2)')).length;
+        let est = 5;
+        if (is6L) est += 150;
+        if (isFractured) est += 40;
+        est += t1Count * 35;
+        est += t2Count * 8;
+        price = est;
+      }
     }
 
     // Items poe.ninja has no pricing/icon data for (utility flasks and cluster jewel bases
@@ -400,6 +429,25 @@ export type ModComparison = {
   currentValue?: string;
   targetValue?: string;
 };
+
+// Minimum delta required to surface a ValueUpgrade, keyed by stat keyword.
+// Flat threshold (5) is too coarse: 5 life is noise but 5% resistance matters.
+const MOD_DIFF_THRESHOLDS: Array<{ pattern: RegExp; min: number }> = [
+  { pattern: /maximum life|maximum mana|maximum energy shield/i, min: 25 },
+  { pattern: /resist(ance)?/i, min: 4 },
+  { pattern: /to strength|to dexterity|to intelligence/i, min: 10 },
+  { pattern: /critical strike (chance|multiplier)/i, min: 5 },
+  { pattern: /increased (attack|cast) speed/i, min: 3 },
+  { pattern: /increased.*damage|more.*damage/i, min: 5 },
+  { pattern: /adds.*damage/i, min: 5 },
+];
+
+function getModDiffThreshold(modText: string): number {
+  for (const { pattern, min } of MOD_DIFF_THRESHOLDS) {
+    if (pattern.test(modText)) return min;
+  }
+  return 5;
+}
 
 /**
  * Compares two items and returns a list of differences.
@@ -460,12 +508,12 @@ export function compareItems(current?: BuildItem, target?: BuildItem): ModCompar
       } else {
         const tVal = getFirstNum(tMod);
         const cVal = getFirstNum(match);
-        
+
         if (tVal !== null && cVal !== null) {
           const diff = tVal - cVal;
-          if (diff >= 5) {
-            comparisons.push({ 
-              mod: tMod.replace(/\{.*?\}/g, '').replace(/\(Tier: \d+\)/, '').trim(), 
+          if (diff >= getModDiffThreshold(tMod)) {
+            comparisons.push({
+              mod: tMod.replace(/\{.*?\}/g, '').replace(/\(Tier: \d+\)/, '').trim(),
               type: 'ValueUpgrade',
               currentValue: `${cVal}`,
               targetValue: `${tVal}`
